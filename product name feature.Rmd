@@ -1,0 +1,277 @@
+---
+title: "Product name"
+author: '1708758'
+date: '2022-03-18'
+output: html_document
+---
+---
+title: "text cleaning"
+author: '1708758'
+date: "04/03/2022"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r message=FALSE}
+library(jsonlite)
+library(dplyr)
+library(FactoMineR)
+library(tidyr)
+library(tidytext)
+library(qdap)
+library(tm)
+library(textstem)
+library(textclean)
+library(lexicon)
+library(stringr)
+library(tidyverse)
+library(hunspell)
+library(XML)
+library(rvest)
+library(MASS)
+```
+
+
+- Import the video games dataset
+```{r message=FALSE}
+game_reviews <- stream_in(gzfile("reviews_Video_Games_5.json.gz"))
+```
+
+
+Get the product names from the meta data
+```{r}
+#import meta_data to get the title field
+meta_data <- read_csv("meta_VG.csv")
+#join review_data with meta_data
+all_data <- game_reviews_clean1%>%
+  left_join(meta_data, by="asin")
+#keep only asins and title columns
+products <- data.frame(all_data$asin, all_data$title)
+#rename columns
+colnames(products) <- c("asin", "title")
+#keep only the distinct asins and associated product names
+product_dictionary <- products %>%
+  distinct(asin, title)
+
+sum(is.na(product_dictionary$title))
+#there's 10550 products for which we don't have names from the meta_data
+
+#123 product titles
+#10672 asins = diff products
+
+product_dictionary <- product_dictionary %>%
+  arrange(title)
+
+```
+
+
+- Scrape the web to find the rest of the product names
+```{r}
+#let's try to find the product names online
+#we'll use Rselenium to do some automatic webscraping
+
+#install.packages('RSelenium')
+library("RSelenium")
+
+#run server with: java -jar selenium-server-standalone-3.9.1.jar
+
+# initialize 
+remDr <- remoteDriver(
+  remoteServerAddr = "localhost",
+  port = 4444L, 
+  browser = "chrome"
+)
+#open the server
+remDr$open()
+
+#navigate to google
+remDr$navigate("https://google.com/")
+
+# select the search box 
+search_box <- remDr$findElement(using = "class", value="gLFyf")
+
+# send a value to search  
+search_box$sendKeysToElement(list("0700099867", key="enter"))
+
+#looks like it's working - the first google result seems to be a link to the product we're looking for
+
+#let's create a loop to search for all the products and select the first google result
+
+#for google search
+for (i in 5810:nrow(product_dictionary)) {
+  if (is.na(product_dictionary$title[i])){
+  remDr$navigate("https://google.com/")
+  search_box <- remDr$findElement(using = "class", value="gLFyf")
+  search_box$sendKeysToElement(list(product_dictionary$asin[i], key="enter"))
+  skip_to_next <- FALSE
+  tryCatch(remDr$findElement(using = "class", value="LC20lb"), error = function(e) { skip_to_next <<- TRUE}) # to automatically skip errors stemming from searches google has no results for 
+  if(skip_to_next) { next }  else {
+  prod_name <- remDr$findElement(using = "class", value="LC20lb")
+  prod_name <- prod_name$getElementText()
+  product_dictionary$title[i] <- as.character(prod_name)
+  }
+  if (i%%10==0) {Sys.sleep(sample(20:30, 1))} # to avoid capchas make the search seem less robotic: every 10 quesries make the loop stop for a randomly selected time
+  }
+}
+
+remDr$close()
+
+#save the dataframe
+write.csv(product_dictionary, file="C:/Users/adria/OneDrive/Documents/1 Text Analytics/Assignment/product_dictionary.csv")
+
+#let's count how many missing values there are
+sum(is.na(product_dictionary$title))
+
+
+#binman::list_versions("chromedriver")$win32
+
+
+```
+
+Product dictionary cleaning
+```{r}
+
+product_dictionary <- read.csv("C:/Users/adria/OneDrive/Documents/1 Text Analytics/Assignment/product_dictionary.csv")
+
+str(product_dictionary)
+product_dictionary<-safe
+
+#let's convert all the irrelevant entries to NAs
+product_dictionary <- product_dictionary %>%
+  arrange(title)
+
+product_dictionary$title[1:4]<-NA
+product_dictionary$title[9:17]<-NA
+
+#let's count the missing values again
+sum(is.na(product_dictionary$title))
+#54 missing values is a great starting point
+
+product_dictionary <- product_dictionary %>%
+  arrange(asin)
+
+
+#remove punctuations
+product_dictionary$title<-str_replace_all(product_dictionary$title, "[[:punct:]]", "")
+#remove non-alphanumeric characters
+product_dictionary$title<-str_replace_all(product_dictionary$title, "[^[:alnum:]]", " ")
+#remove numbers
+product_dictionary$title<-removeNumbers(product_dictionary$title)
+
+#let's save this dataset
+write.csv(product_dictionary, file="C:/Users/adria/OneDrive/Documents/1 Text Analytics/Assignment/product_dictionary_clean.csv")
+
+
+#let's tokenize them
+product_dictionary_tokens <- product_dictionary %>%
+  unnest_tokens(word, title)
+
+#some terms seemed to be non-necessary and heavily repeated, let's see what they are
+freqterms <- freq_terms(product_dictionary_tokens$word)
+
+#let's add them as custom stop_words (all except consoles - those are relevant for the product name) and some extra words like price tracker
+my_stopwords <- tibble(word = c("amazon", "game", "uk", "amazoncouk", "games", "video", "amazoncom", "b", "customer", "reviews", "ds", "price", "tracker", "edition"), lexicon = "custom")
+#let's also add the console names as stop words
+console_name <- tibble(word = c ("playstation", "wii", "pc", "gamecube", " xbox", " nintendo", " game boy", "sega", "neogeo pocket", "game boy", "sony psp", "phone", "3do", "atari 2600", "other office equipment", "turbografx 16", "atari jaguar", "psp", "windows", "mac"), lexicon= "custom")
+
+stop_words
+
+#create the custom stop word database
+stop_words <- my_stopwords %>%
+  rbind(stop_words)
+stop_words <- stop_words %>%
+  rbind(console_name)
+
+#remove stop words from the names
+product_dictionary_tokens_clean <- product_dictionary_tokens %>%
+  anti_join(stop_words)
+
+#let's save this final version as well
+write.csv(product_dictionary_tokens_clean, file="C:/Users/adria/OneDrive/Documents/1 Text Analytics/Assignment/product_dictionary_tokens.csv")
+
+```
+
+Clean the original data
+```{r}
+#Original Data Cleaning
+game_reviews<-distinct(game_reviews)
+colSums(is.na(game_reviews))
+game_reviews <- game_reviews %>% 
+  mutate(IDasin = paste(reviewerID,asin))  
+length(unique(game_reviews$IDasin))  
+game_reviews$reviewText<-gsub("\\."," ",game_reviews$reviewText)
+game_reviews$reviewText<-str_squish(game_reviews$reviewText)
+game_reviews$reviewText<-rm_url(game_reviews$reviewText)
+game_reviews$reviewText<-str_remove_all(game_reviews$reviewText, pattern = "\\<.*?\\>")
+game_reviews$reviewText<-replace_symbol(game_reviews$reviewText)
+game_reviews$reviewText<-replace_contraction(game_reviews$reviewText)
+game_reviews$reviewText<-replace_word_elongation(game_reviews$reviewText)
+game_reviews$reviewText<-replace_abbreviation(game_reviews$reviewText)
+game_reviews$reviewText<-removeNumbers(game_reviews$reviewText)
+game_reviews$reviewText<-bracketX(game_reviews$reviewText)
+game_reviews_clean1<-game_reviews
+game_reviews$review_id <- 1:nrow(game_reviews)
+game_reviews_token <- game_reviews %>%
+  unnest_tokens(word, reviewText) %>%
+  anti_join(stop_words)
+
+```
+
+Obtain the column of interest and add it to the original data
+```{r}
+
+# join the tokenized original dataset with the tokenized product names dataset (join automatically by common tokens)
+game_reviews_tokens_names <- game_reviews_token %>%
+  inner_join(product_dictionary_tokens_clean)
+#game reviews tokens names now contains all the reviews that mention the product name
+
+
+#create a column to keep track of whether product name token is found
+game_reviews_tokens_names$mentions_product <- 1
+
+#input this column within the original reviews dataframe
+game_reviews_clean1 <- game_reviews_clean1 %>%
+  left_join(game_reviews_tokens_names)
+#the word column is the product name token that is mentioned in the review
+#the mentions_product column is the neccessary column
+
+#remove unnecessary column
+game_reviews_clean1$X <-NULL
+
+#convert NA values to 0
+for(i in 1:nrow(game_reviews_clean1)){
+  if(is.na(game_reviews_clean1$mentions_product[i]))
+    game_reviews_clean1$mentions_product[i]<-0
+}
+
+game_reviews_clean1$mentions_product <- as.factor(game_reviews_clean1$mentions_product)
+str(game_reviews_clean1)
+```
+
+
+- Finally, regress the product score on the mentions_product variable created to see if this feature is relevant for predicting the score
+```{r}
+#lm model first
+model1 <- lm(overall~mentions_product, data=game_reviews_clean1)
+summary(model1)
+
+#very very poor R2m but significant coeff nevertheless. Looks like mentioning the product name has a tiny positive impact on the score of the product
+#the problem is the OLS regression run on a categorical variable instead of a continous one. 
+#let's run an ordibnal logistic regression instead: 
+
+model2 <- polr(as.factor(overall) ~ mentions_product, data=game_reviews_clean1, Hess=TRUE)
+#let's get the results of the model
+m_summary <- summary(model2)
+m_table <- coef(m_summary)
+p_m <- pnorm(abs(m_table[, "t value"]), lower.tail = FALSE) * 2
+(m_table <- cbind(m_table, "p value" = p_m))
+
+#since p is tiny the coefficient is significant. Therefore it's likely that mentioning the product name within the review has a significant positive (coeff=0.048) impact on the overall score granted by the reviewer
+```
+
+
