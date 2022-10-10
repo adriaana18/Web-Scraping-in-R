@@ -6,3 +6,6 @@ This project automates a web scraping robot that googles ASIN codes from a datas
 The product names data was missing from the initial meta-data so the alternative solution was to scrape them from the web. A logical variable was then created that tracks whether the text of each review contains the name of the product. This is subsequently inputed into a logistic regression that reveals that mentioning the product name within the review has a significant positive (coeff=0.048) impact on the overall score granted by the reviewer. 
 
 The code uses the Rselenium package and runs without the need for user interaction - capcha avoidance was done by incorporating a pause & error catching pattern into the code aimed to mimic human behaviour. 
+
+
+DATA: the original data files are too big to be uploaded to Github but they are available on request. The initial json data file contains meta-data fro some 200k Amazon reviews of video games related products and is about 100MB while the extracted CSV file is arounf 40MB - way over the 25MB github limit.
